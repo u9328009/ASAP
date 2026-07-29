@@ -5,30 +5,28 @@ import time
 import numpy as np
 import soundfile as sf
 
-# Ensure script directory is in sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 import torch
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox,
-    QCheckBox, QTextEdit, QFileDialog, QGroupBox, QMessageBox, QSlider,
-    QListWidget, QListWidgetItem, QDialog, QFrame, QProgressBar, QSplitter,
-    QTreeView, QFileSystemModel, QStackedWidget, QAbstractSpinBox,
-    QTableWidget, QTableWidgetItem, QHeaderView
+    QApplication, QMainWindow, QWidget, QFileDialog, QMessageBox,
+    QListWidgetItem, QDialog, QTableWidgetItem, QVBoxLayout,
+    QStackedWidget, QTabWidget, QLineEdit, QPushButton, QComboBox, QSpinBox,
+    QDoubleSpinBox, QCheckBox, QTextEdit, QGroupBox, QSlider, QListWidget,
+    QProgressBar, QSplitter, QTreeView, QFileSystemModel, QHeaderView
 )
-from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl, QDir
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QUrl, QDir, QFile, QIODevice
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
-from PySide6.QtGui import QFont, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent, QColor
+from PySide6.QtGui import QFont, QKeySequence, QShortcut, QDragEnterEvent, QDropEvent, QColor, QAction
+from PySide6.QtUiTools import QUiLoader
 
 import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 
-# Import from logic.py
 from logic import (
     BASE_DIR, load_settings, save_settings_to_file, DEFAULT_SETTINGS,
     get_hardware_info, resolve_device, load_ai_models,
@@ -38,10 +36,11 @@ from logic import (
     run_stt_no_hallucination, vad_model, stt_model
 )
 
+UI_FILE_PATH = os.path.join(BASE_DIR, "main.ui")
+if not os.path.exists(UI_FILE_PATH):
+    UI_FILE_PATH = os.path.join(BASE_DIR, "Main.ui")
 
-# =============================================================================
-# Waveform Canvas
-# =============================================================================
+
 class InteractiveWaveformCanvas(FigureCanvasQTAgg):
     seek_requested = Signal(float)
 
@@ -126,7 +125,6 @@ class InteractiveWaveformCanvas(FigureCanvasQTAgg):
         super().mousePressEvent(event)
 
 
-# Log Dialog
 class LogDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -162,7 +160,6 @@ class LogDialog(QDialog):
         QMessageBox.information(self, "Copied", "Logs copied to clipboard.")
 
 
-# Background Processing Thread
 class AutoClassifierThread(QThread):
     log_signal = Signal(str)
     progress_signal = Signal(int, str)
@@ -335,16 +332,31 @@ class AutoClassifierThread(QThread):
         self.finished_signal.emit()
 
 
-# =============================================================================
-# PySide6 Main Window UI
-# =============================================================================
 class AudioClassifierApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.settings = load_settings()
 
+        if not os.path.exists(UI_FILE_PATH) or os.path.getsize(UI_FILE_PATH) == 0:
+            QMessageBox.critical(None, "UI File Error", f"main.ui file is missing or empty at:\n{UI_FILE_PATH}\n\nPlease ensure main.ui contains valid XML.")
+            sys.exit(1)
+
+        ui_file = QFile(UI_FILE_PATH)
+        if not ui_file.open(QIODevice.ReadOnly):
+            QMessageBox.critical(None, "UI Read Error", f"Cannot open main.ui file.")
+            sys.exit(1)
+
+        loader = QUiLoader()
+        self.ui = loader.load(ui_file, self)
+        ui_file.close()
+
+        if self.ui is None:
+            QMessageBox.critical(None, "XML Parse Error", "Failed to parse main.ui file.")
+            sys.exit(1)
+
+        self.setCentralWidget(self.ui)
         self.setWindowTitle("Smart Audio Classifier V0.1.3")
-        self.resize(1200, 850)
+        self.resize(self.ui.size())
         self.setAcceptDrops(True)
 
         self.media_player = QMediaPlayer(self)
@@ -364,9 +376,251 @@ class AudioClassifierApp(QMainWindow):
 
         self.log_dialog = LogDialog(self)
 
-        self.setup_ui()
+        self.bind_menu_actions()
+        self.bind_ui_elements()
+        self.setup_canvas_placeholders()
         self.setup_keyboard_shortcuts()
         self.apply_dark_theme()
+
+    def bind_menu_actions(self):
+        main_stack = self.ui.findChild(QStackedWidget, "main_stack") or self.ui.findChild(QTabWidget, "main_tabs")
+
+        def switch_page(idx):
+            if main_stack:
+                if isinstance(main_stack, QStackedWidget): main_stack.setCurrentIndex(idx)
+                elif isinstance(main_stack, QTabWidget): main_stack.setCurrentIndex(idx)
+
+        menu_mappings = {
+            "actionAudio_sort": 0,
+            "actionManual_Sort": 1,
+            "actionAudio_Enhancement": 2,
+            "actionSetting": 3
+        }
+
+        for act_name, page_idx in menu_mappings.items():
+            act = self.ui.findChild(QAction, act_name)
+            if act:
+                act.triggered.connect(lambda idx=page_idx: switch_page(idx))
+
+    def bind_ui_elements(self):
+        def get_w(name, w_type):
+            return self.ui.findChild(w_type, name)
+
+        # Auto Tab
+        self.txt_src = get_w("txt_src", QLineEdit)
+        self.txt_dst = get_w("txt_dst", QLineEdit)
+        self.btn_src = get_w("btn_src", QPushButton)
+        self.btn_dst = get_w("btn_dst", QPushButton)
+
+        if self.btn_src: self.btn_src.clicked.connect(lambda: self.browse_folder(self.txt_src))
+        if self.btn_dst: self.btn_dst.clicked.connect(lambda: self.browse_folder(self.txt_dst))
+
+        if self.txt_src: self.txt_src.setText(os.path.abspath(self.settings["src_dir"]))
+        if self.txt_dst: self.txt_dst.setText(os.path.abspath(self.settings["dst_dir"]))
+
+        self.spn_dur = get_w("spn_dur", QSpinBox)
+        self.spn_crop = get_w("spn_crop", QSpinBox)
+        self.spn_speech = get_w("spn_speech", QDoubleSpinBox)
+        self.spn_gain = get_w("spn_gain", QDoubleSpinBox)
+        self.cmb_stt = get_w("cmb_stt", QComboBox)
+        self.cmb_dev = get_w("cmb_dev", QComboBox)
+
+        if self.spn_dur: self.spn_dur.setValue(int(self.settings["min_dur_thresh"]))
+        if self.spn_crop: self.spn_crop.setValue(int(self.settings["crop_pct"]))
+        if self.spn_speech: self.spn_speech.setValue(self.settings["speech_thresh_pct"])
+        if self.spn_gain: self.spn_gain.setValue(float(self.settings.get("gain_boost_db", 0.0)))
+
+        if self.cmb_stt and self.cmb_stt.count() == 0:
+            self.cmb_stt.addItems(["large-v3-turbo (Recommended High Accuracy)", "base (Fast)", "small (Balanced)", "medium (High Accuracy)"])
+        if self.cmb_dev and self.cmb_dev.count() == 0:
+            self.cmb_dev.addItems(["Auto (GPU Priority)", "GPU (CUDA)", "CPU"])
+
+        self.btn_run_auto = get_w("btn_run_auto", QPushButton)
+        if self.btn_run_auto: self.btn_run_auto.clicked.connect(self.start_auto_classification)
+
+        self.lbl_dash_status = get_w("lbl_dash_status", QLabel)
+        self.progress_bar = get_w("progress_bar", QProgressBar)
+        self.lbl_dash_file = get_w("lbl_dash_file", QLabel)
+
+        self.lbl_stat_total = get_w("lbl_stat_total", QLabel)
+        self.lbl_stat_processed = get_w("lbl_stat_processed", QLabel)
+        self.lbl_stat_roomtone = get_w("lbl_stat_roomtone", QLabel)
+        self.lbl_stat_short = get_w("lbl_stat_short", QLabel)
+        self.lbl_stat_match = get_w("lbl_stat_match", QLabel)
+        self.lbl_stat_review = get_w("lbl_stat_review", QLabel)
+
+        # Manual Tab
+        self.btn_play = get_w("btn_play", QPushButton)
+        self.btn_stop = get_w("btn_stop", QPushButton)
+
+        if self.btn_play: self.btn_play.clicked.connect(self.toggle_play)
+        if self.btn_stop: self.btn_stop.clicked.connect(self.stop_audio)
+
+        self.lbl_vol_db = get_w("lbl_vol_db", QLabel)
+        self.slider_vol_db = get_w("slider_vol_db", QSlider)
+        if self.slider_vol_db:
+            self.slider_vol_db.setRange(-30, 18)
+            self.slider_vol_db.setValue(int(self.settings.get("default_volume_db", 0.0)))
+            self.slider_vol_db.valueChanged.connect(self.on_volume_db_changed)
+
+        self.chk_autoplay = get_w("chk_autoplay", QCheckBox)
+        if self.chk_autoplay: self.chk_autoplay.setChecked(self.settings.get("auto_play", False))
+
+        self.lbl_timer = get_w("lbl_timer", QLabel)
+        self.lbl_lufs = get_w("lbl_lufs", QLabel)
+        self.lbl_tp = get_w("lbl_tp", QLabel)
+        self.lbl_peak = get_w("lbl_peak", QLabel)
+        self.lbl_rms = get_w("lbl_rms", QLabel)
+
+        self.lbl_queue_count = get_w("lbl_queue_count", QLabel)
+        self.list_files = get_w("list_files", QListWidget)
+        if self.list_files: self.list_files.itemSelectionChanged.connect(self.on_file_selected)
+
+        self.btn_refresh = get_w("btn_refresh", QPushButton)
+        if self.btn_refresh: self.btn_refresh.clicked.connect(self.refresh_manual_file_list)
+
+        self.lbl_file_info = get_w("lbl_file_info", QLabel)
+        self.txt_stt = get_w("txt_stt", QLineEdit)
+        self.txt_sc = get_w("txt_sc", QLineEdit)
+        self.txt_ct = get_w("txt_ct", QLineEdit)
+
+        self.btn_move_sc = get_w("btn_move_sc", QPushButton)
+        if self.btn_move_sc: self.btn_move_sc.clicked.connect(self.move_to_scene)
+
+        self.btn_roomtone = get_w("btn_roomtone", QPushButton)
+        if self.btn_roomtone: self.btn_roomtone.clicked.connect(lambda: self.move_to_folder("RoomTone"))
+
+        self.btn_short = get_w("btn_short", QPushButton)
+        if self.btn_short: self.btn_short.clicked.connect(lambda: self.move_to_folder("Short_Duration"))
+
+        self.btn_skip = get_w("btn_skip", QPushButton)
+        if self.btn_skip: self.btn_skip.clicked.connect(self.skip_file)
+
+        self.btn_undo = get_w("btn_undo", QPushButton)
+        if self.btn_undo: self.btn_undo.clicked.connect(self.undo_last_action)
+
+        # Dynamic QTreeView Binding (Source / Destination / Enhancement)
+        self.tree_view_src = get_w("tree_view_src", QTreeView)
+        self.tree_view_dst = get_w("tree_view", QTreeView) or get_w("tree_view_dst", QTreeView)
+        self.tree_view_enh = get_w("tree_view_enh", QTreeView)
+
+        if self.tree_view_src:
+            self.tree_model_src = QFileSystemModel()
+            self.tree_model_src.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
+            src_path = os.path.abspath(self.settings["src_dir"])
+            os.makedirs(src_path, exist_ok=True)
+            self.tree_model_src.setRootPath(src_path)
+            self.tree_view_src.setModel(self.tree_model_src)
+            self.tree_view_src.setRootIndex(self.tree_model_src.index(src_path))
+            self.tree_view_src.setHeaderHidden(True)
+            self.tree_view_src.setColumnHidden(1, True)
+            self.tree_view_src.setColumnHidden(2, True)
+            self.tree_view_src.setColumnHidden(3, True)
+            self.tree_view_src.doubleClicked.connect(self.on_tree_file_double_clicked)
+
+        if self.tree_view_dst:
+            self.tree_model = QFileSystemModel()
+            self.tree_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
+            dst_path = os.path.abspath(self.settings["dst_dir"])
+            os.makedirs(dst_path, exist_ok=True)
+            self.tree_model.setRootPath(dst_path)
+            self.tree_view_dst.setModel(self.tree_model)
+            self.tree_view_dst.setRootIndex(self.tree_model.index(dst_path))
+            self.tree_view_dst.setHeaderHidden(True)
+            self.tree_view_dst.setColumnHidden(1, True)
+            self.tree_view_dst.setColumnHidden(2, True)
+            self.tree_view_dst.setColumnHidden(3, True)
+            self.tree_view_dst.doubleClicked.connect(self.on_tree_file_double_clicked)
+
+        if self.tree_view_enh:
+            if not hasattr(self, 'tree_model'):
+                self.tree_model = QFileSystemModel()
+                self.tree_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
+                dst_path = os.path.abspath(self.settings["dst_dir"])
+                os.makedirs(dst_path, exist_ok=True)
+                self.tree_model.setRootPath(dst_path)
+            self.tree_view_enh.setModel(self.tree_model)
+            self.tree_view_enh.setRootIndex(self.tree_model.index(os.path.abspath(self.settings["dst_dir"])))
+            self.tree_view_enh.setHeaderHidden(True)
+            self.tree_view_enh.setColumnHidden(1, True)
+            self.tree_view_enh.setColumnHidden(2, True)
+            self.tree_view_enh.setColumnHidden(3, True)
+            self.tree_view_enh.doubleClicked.connect(self.on_tree_file_double_clicked)
+
+        # Settings Tab
+        self.chk_prompt_enable = get_w("chk_prompt_enable", QCheckBox)
+        if self.chk_prompt_enable: self.chk_prompt_enable.setChecked(self.settings.get("stt_prompt_enabled", True))
+
+        self.txt_prompt = get_w("txt_prompt", QTextEdit)
+        if self.txt_prompt: self.txt_prompt.setPlainText(self.settings.get("stt_initial_prompt", ""))
+
+        self.btn_save = get_w("btn_save", QPushButton)
+        if self.btn_save: self.btn_save.clicked.connect(self.save_settings)
+
+        self.btn_show_logs = get_w("btn_show_logs", QPushButton)
+        if self.btn_show_logs: self.btn_show_logs.clicked.connect(self.log_dialog.show)
+
+    def on_tree_file_double_clicked(self, index):
+        """Play and preview audio when double clicked in TreeView"""
+        sender_tree = self.sender()
+        if not sender_tree: return
+        model = sender_tree.model()
+        file_path = model.filePath(index)
+
+        if os.path.isfile(file_path):
+            supported_exts = ('.wav', '.mp3', '.m4a', '.flac', '.ogg', '.aiff', '.aac')
+            if file_path.lower().endswith(supported_exts):
+                self.stop_audio()
+                self.current_audio_file = os.path.abspath(file_path)
+
+                filename = os.path.basename(file_path)
+                cache_data = cache_mgr.load_cache(filename)
+                speech_spans = cache_data.get('speech_timestamps', []) if cache_data else []
+                transcribed_text = cache_data.get('transcribed_text', '') if cache_data else ''
+
+                if self.txt_stt: self.txt_stt.setText(transcribed_text)
+
+                gain_v = self.spn_gain.value() if self.spn_gain else 0.0
+                crop_v = self.spn_crop.value() if self.spn_crop else 15
+
+                audio_data, sr = process_audio_pipeline(file_path, gain_db=gain_v)
+                self.total_duration_sec = len(audio_data) / float(sr)
+
+                lufs, tp, pk, rms = calculate_audio_metering(audio_data, sr)
+                if self.lbl_lufs: self.lbl_lufs.setText(f"LUFS: {lufs:.1f} dB")
+                if self.lbl_tp: self.lbl_tp.setText(f"True Peak: {tp:.1f} dBTP")
+                if self.lbl_peak: self.lbl_peak.setText(f"Peak: {pk:.1f} dB")
+                if self.lbl_rms: self.lbl_rms.setText(f"RMS: {rms:.1f} dB")
+
+                if hasattr(self, 'canvas') and self.canvas:
+                    self.canvas.plot_waveform_with_vad(audio_data, sr, speech_spans, crop_v)
+
+                if self.lbl_file_info: self.lbl_file_info.setText(f"File: {filename} | Duration: {self.total_duration_sec:.1f}s")
+
+                self.media_player.setSource(QUrl.fromLocalFile(self.current_audio_file))
+                self.update_timer_label(0.0)
+                self.toggle_play()
+
+    def setup_canvas_placeholders(self):
+        self.canvas = InteractiveWaveformCanvas(self)
+        self.canvas.seek_requested.connect(self.seek_audio)
+
+        container = self.ui.findChild(QWidget, "waveform_container")
+        if container:
+            if container.layout() is None:
+                lay = QVBoxLayout(container)
+                lay.setContentsMargins(0, 0, 0, 0)
+                container.setLayout(lay)
+            container.layout().addWidget(self.canvas)
+
+        self.canvas_enh = InteractiveWaveformCanvas(self)
+        container_enh = self.ui.findChild(QWidget, "waveform_container_enh")
+        if container_enh:
+            if container_enh.layout() is None:
+                lay_enh = QVBoxLayout(container_enh)
+                lay_enh.setContentsMargins(0, 0, 0, 0)
+                container_enh.setLayout(lay_enh)
+            container_enh.layout().addWidget(self.canvas_enh)
 
     def apply_volume_db(self, db_val):
         linear_gain = 10 ** (db_val / 20.0)
@@ -377,7 +631,7 @@ class AudioClassifierApp(QMainWindow):
 
     def dropEvent(self, event: QDropEvent):
         urls = event.mimeData().urls()
-        if urls:
+        if urls and self.txt_src:
             folder_path = os.path.abspath(urls[0].toLocalFile())
             if os.path.isdir(folder_path):
                 self.txt_src.setText(folder_path)
@@ -392,198 +646,41 @@ class AudioClassifierApp(QMainWindow):
         QShortcut(QKeySequence(Qt.Key_Return), self, self.move_to_scene)
         QShortcut(QKeySequence(Qt.Key_Enter), self, self.move_to_scene)
 
-    def setup_ui(self):
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(6, 6, 6, 6)
-
-        self.tabs = QTabWidget()
-        main_layout.addWidget(self.tabs)
-
-        self.tab_auto = QWidget()
-        self.tab_manual = QWidget()
-        self.tab_enhance = QWidget()
-        self.tab_settings = QWidget()
-
-        self.tabs.addTab(self.tab_auto, "Auto Classifier")
-        self.tabs.addTab(self.tab_manual, "Manual Review Workstation")
-        self.tabs.addTab(self.tab_enhance, "Voice Enhancement Workstation")
-        self.tabs.addTab(self.tab_settings, "Settings & Hardware")
-
-        self.setup_auto_tab()
-        self.setup_manual_tab()
-        self.setup_enhance_tab()
-        self.setup_settings_tab()
-
-        bottom_bar = QHBoxLayout()
-        _, hw_msg = get_hardware_info()
-        self.lbl_status_bar = QLabel(hw_msg)
-        self.lbl_status_bar.setStyleSheet("color: #81c784; font-weight: bold;")
-
-        btn_show_logs = QPushButton("Show Detailed Logs")
-        btn_show_logs.clicked.connect(self.log_dialog.show)
-
-        bottom_bar.addWidget(self.lbl_status_bar)
-        bottom_bar.addStretch()
-        bottom_bar.addWidget(btn_show_logs)
-
-        main_layout.addLayout(bottom_bar)
-        self.tabs.currentChanged.connect(self.on_tab_changed)
-
-    def remove_spinbox_buttons(self, spinbox):
-        spinbox.setButtonSymbols(QAbstractSpinBox.NoButtons)
-
-    # -------------------------------------------------------------------------
-    # TAB 1: Auto Classifier
-    # -------------------------------------------------------------------------
-    def setup_auto_tab(self):
-        layout = QVBoxLayout(self.tab_auto)
-        splitter_auto = QSplitter(Qt.Horizontal)
-
-        p1 = QFrame()
-        lay_p1 = QVBoxLayout(p1)
-        box_dir = QGroupBox(" Folder Configuration ")
-        grid_dir = QVBoxLayout(box_dir)
-
-        self.txt_src = QLineEdit(os.path.abspath(self.settings["src_dir"]))
-        btn_src = QPushButton("Browse Source Folder")
-        btn_src.clicked.connect(lambda: self.browse_folder(self.txt_src))
-
-        self.txt_dst = QLineEdit(os.path.abspath(self.settings["dst_dir"]))
-        btn_dst = QPushButton("Browse Target Folder")
-        btn_dst.clicked.connect(lambda: self.browse_folder(self.txt_dst))
-
-        grid_dir.addWidget(QLabel("Source Folder (Drag & Drop):"))
-        grid_dir.addWidget(self.txt_src)
-        grid_dir.addWidget(btn_src)
-        grid_dir.addWidget(QLabel("Target Folder:"))
-        grid_dir.addWidget(self.txt_dst)
-        grid_dir.addWidget(btn_dst)
-        lay_p1.addWidget(box_dir)
-        lay_p1.addStretch()
-
-        p2 = QFrame()
-        lay_p2 = QVBoxLayout(p2)
-        box_opts = QGroupBox(" Workflow Parameters & Pipeline ")
-        lay_opts = QVBoxLayout(box_opts)
-
-        h1 = QHBoxLayout()
-        self.spn_dur = QSpinBox()
-        self.spn_dur.setRange(1, 30); self.spn_dur.setValue(int(self.settings["min_dur_thresh"]))
-        self.remove_spinbox_buttons(self.spn_dur)
-        h1.addWidget(QLabel("Min Dur (s):")); h1.addWidget(self.spn_dur)
-
-        self.spn_crop = QSpinBox()
-        self.spn_crop.setRange(5, 30); self.spn_crop.setValue(int(self.settings["crop_pct"]))
-        self.remove_spinbox_buttons(self.spn_crop)
-        h1.addWidget(QLabel("Crop (%):")); h1.addWidget(self.spn_crop)
-
-        self.spn_speech = QDoubleSpinBox()
-        self.spn_speech.setRange(0.5, 10.0); self.spn_speech.setValue(self.settings["speech_thresh_pct"])
-        self.remove_spinbox_buttons(self.spn_speech)
-        h1.addWidget(QLabel("Mid Speech (%):")); h1.addWidget(self.spn_speech)
-        lay_opts.addLayout(h1)
-
-        h2 = QHBoxLayout()
-        self.cmb_stt = QComboBox()
-        self.cmb_stt.addItems([
-            "large-v3-turbo (Recommended High Accuracy)",
-            "base (Fast)",
-            "small (Balanced)",
-            "medium (High Accuracy)"
-        ])
-        self.cmb_dev = QComboBox()
-        self.cmb_dev.addItems(["Auto (GPU Priority)", "GPU (CUDA)", "CPU"])
-
-        h2.addWidget(QLabel("STT Model:")); h2.addWidget(self.cmb_stt)
-        h2.addWidget(QLabel("Device:")); h2.addWidget(self.cmb_dev)
-        lay_opts.addLayout(h2)
-
-        h3 = QHBoxLayout()
-        self.spn_gain = QDoubleSpinBox()
-        self.spn_gain.setRange(0.0, 24.0); self.spn_gain.setValue(float(self.settings.get("gain_boost_db", 0.0)))
-        self.remove_spinbox_buttons(self.spn_gain)
-        h3.addWidget(QLabel("Gain Boost (dB):")); h3.addWidget(self.spn_gain)
-        lay_opts.addLayout(h3)
-
-        lay_p2.addWidget(box_opts)
-
-        self.btn_run_auto = QPushButton("Run Auto Classification")
-        self.btn_run_auto.setStyleSheet("background-color: #1976d2; color: white; font-weight: bold; padding: 14px; font-size: 14px;")
-        self.btn_run_auto.clicked.connect(self.start_auto_classification)
-        lay_p2.addWidget(self.btn_run_auto)
-        lay_p2.addStretch()
-
-        p3 = QFrame()
-        lay_p3 = QVBoxLayout(p3)
-        box_dash = QGroupBox(" Real-Time Processing Dashboard ")
-        dash_layout = QVBoxLayout(box_dash)
-
-        self.lbl_dash_status = QLabel("System Status: Idle")
-        self.lbl_dash_status.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        self.lbl_dash_status.setStyleSheet("color: #64b5f6;")
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setValue(0)
-        self.progress_bar.setStyleSheet("QProgressBar { height: 25px; text-align: center; font-weight: bold; } QProgressBar::chunk { background-color: #2196f3; }")
-
-        self.lbl_dash_file = QLabel("Current File: None")
-
-        box_stats = QGroupBox(" Classification Statistics ")
-        lay_stats = QVBoxLayout(box_stats)
-        self.lbl_stat_total = QLabel("Total Files Found: 0")
-        self.lbl_stat_processed = QLabel("Processed: 0")
-        self.lbl_stat_roomtone = QLabel("RoomTone: 0")
-        self.lbl_stat_short = QLabel("Short Duration: 0")
-        self.lbl_stat_match = QLabel("Matched Scenes: 0")
-        self.lbl_stat_review = QLabel("Unclassified (Review Needed): 0")
-
-        lay_stats.addWidget(self.lbl_stat_total)
-        lay_stats.addWidget(self.lbl_stat_processed)
-        lay_stats.addWidget(self.lbl_stat_roomtone)
-        lay_stats.addWidget(self.lbl_stat_short)
-        lay_stats.addWidget(self.lbl_stat_match)
-        lay_stats.addWidget(self.lbl_stat_review)
-
-        dash_layout.addWidget(self.lbl_dash_status)
-        dash_layout.addWidget(self.progress_bar)
-        dash_layout.addWidget(self.lbl_dash_file)
-        dash_layout.addWidget(box_stats)
-        dash_layout.addStretch()
-
-        lay_p3.addWidget(box_dash)
-
-        splitter_auto.addWidget(p1)
-        splitter_auto.addWidget(p2)
-        splitter_auto.addWidget(p3)
-        splitter_auto.setSizes([320, 400, 380])
-
-        layout.addWidget(splitter_auto)
-
     def browse_folder(self, target_widget):
+        if not target_widget: return
         dir_path = QFileDialog.getExistingDirectory(self, "Select Folder")
         if dir_path:
             target_widget.setText(os.path.abspath(dir_path))
+            if target_widget == self.txt_src and hasattr(self, 'tree_model_src') and self.tree_model_src:
+                self.tree_model_src.setRootPath(os.path.abspath(dir_path))
+                if self.tree_view_src:
+                    self.tree_view_src.setRootIndex(self.tree_model_src.index(os.path.abspath(dir_path)))
+            elif target_widget == self.txt_dst and hasattr(self, 'tree_model') and self.tree_model:
+                self.tree_model.setRootPath(os.path.abspath(dir_path))
+                if self.tree_view_dst:
+                    self.tree_view_dst.setRootIndex(self.tree_model.index(os.path.abspath(dir_path)))
 
     def start_auto_classification(self):
-        self.btn_run_auto.setEnabled(False)
+        if self.btn_run_auto: self.btn_run_auto.setEnabled(False)
         self.log_dialog.clear_log()
-        self.lbl_dash_status.setText("System Status: Processing Batch...")
-        self.progress_bar.setValue(0)
+        if self.lbl_dash_status: self.lbl_dash_status.setText("System Status: Processing Batch...")
+        if self.progress_bar: self.progress_bar.setValue(0)
 
-        self.settings["gain_boost_db"] = self.spn_gain.value()
+        src = self.txt_src.text() if self.txt_src else self.settings["src_dir"]
+        dst = self.txt_dst.text() if self.txt_dst else self.settings["dst_dir"]
+        dur = self.spn_dur.value() if self.spn_dur else 5
+        crop = self.spn_crop.value() if self.spn_crop else 15
+        speech = self.spn_speech.value() if self.spn_speech else 2.0
+        stt_m = self.cmb_stt.currentText() if self.cmb_stt else "large-v3-turbo"
+        dev_m = self.cmb_dev.currentText() if self.cmb_dev else "Auto"
+        gain_v = self.spn_gain.value() if self.spn_gain else 0.0
+
+        self.settings["gain_boost_db"] = gain_v
 
         self.thread = AutoClassifierThread(
-            src_dir=self.txt_src.text(),
-            dst_dir=self.txt_dst.text(),
-            min_dur=self.spn_dur.value(),
-            crop_pct=self.spn_crop.value(),
-            speech_thresh=self.spn_speech.value(),
-            vad_choice="Silero VAD v5",
-            stt_choice=self.cmb_stt.currentText(),
-            dev_choice=self.cmb_dev.currentText(),
-            settings=self.settings
+            src_dir=src, dst_dir=dst, min_dur=dur, crop_pct=crop,
+            speech_thresh=speech, vad_choice="Silero VAD v5", stt_choice=stt_m,
+            dev_choice=dev_m, settings=self.settings
         )
         self.thread.log_signal.connect(self.log_dialog.append_log)
         self.thread.progress_signal.connect(self.update_progress_dashboard)
@@ -592,180 +689,25 @@ class AudioClassifierApp(QMainWindow):
         self.thread.start()
 
     def update_progress_dashboard(self, pct, status_msg):
-        self.progress_bar.setValue(pct)
-        self.lbl_dash_file.setText(status_msg)
+        if self.progress_bar: self.progress_bar.setValue(pct)
+        if self.lbl_dash_file: self.lbl_dash_file.setText(status_msg)
 
     def update_stats_dashboard(self, total, processed, roomtone, short, match, review):
-        self.lbl_stat_total.setText(f"Total Files Found: {total}")
-        self.lbl_stat_processed.setText(f"Processed: {processed} / {total}")
-        self.lbl_stat_roomtone.setText(f"RoomTone: {roomtone}")
-        self.lbl_stat_short.setText(f"Short Duration: {short}")
-        self.lbl_stat_match.setText(f"Matched Scenes: {match}")
-        self.lbl_stat_review.setText(f"Unclassified (Review Needed): {review}")
+        if self.lbl_stat_total: self.lbl_stat_total.setText(f"Total Files Found: {total}")
+        if self.lbl_stat_processed: self.lbl_stat_processed.setText(f"Processed: {processed} / {total}")
+        if self.lbl_stat_roomtone: self.lbl_stat_roomtone.setText(f"RoomTone: {roomtone}")
+        if self.lbl_stat_short: self.lbl_stat_short.setText(f"Short Duration: {short}")
+        if self.lbl_stat_match: self.lbl_stat_match.setText(f"Matched Scenes: {match}")
+        if self.lbl_stat_review: self.lbl_stat_review.setText(f"Unclassified (Review Needed): {review}")
 
     def on_auto_finished(self):
-        self.btn_run_auto.setEnabled(True)
-        self.lbl_dash_status.setText("System Status: Batch Classification Completed!")
-        self.tree_model.setRootPath(os.path.abspath(self.txt_dst.text()))
-
-    # -------------------------------------------------------------------------
-    # TAB 2: Manual Review Workstation
-    # -------------------------------------------------------------------------
-    def setup_manual_tab(self):
-        layout = QVBoxLayout(self.tab_manual)
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Pane 1
-        pane1 = QWidget()
-        lay_p1 = QVBoxLayout(pane1); lay_p1.setContentsMargins(0,0,0,0)
-        box_tree = QGroupBox(" Destination Directory Tree ")
-        lay_tree = QVBoxLayout(box_tree)
-
-        self.tree_model = QFileSystemModel()
-        self.tree_model.setFilter(QDir.NoDotAndDotDot | QDir.AllDirs | QDir.Files)
-        root_path = os.path.abspath(self.settings["dst_dir"])
-        os.makedirs(root_path, exist_ok=True)
-        self.tree_model.setRootPath(root_path)
-
-        self.tree_view = QTreeView()
-        self.tree_view.setModel(self.tree_model)
-        self.tree_view.setRootIndex(self.tree_model.index(root_path))
-        self.tree_view.setHeaderHidden(True)
-        self.tree_view.setColumnHidden(1, True)
-        self.tree_view.setColumnHidden(2, True)
-        self.tree_view.setColumnHidden(3, True)
-
-        lay_tree.addWidget(self.tree_view)
-        lay_p1.addWidget(box_tree)
-
-        # Pane 2
-        pane2 = QWidget()
-        lay_p2 = QVBoxLayout(pane2); lay_p2.setContentsMargins(0,0,0,0)
-
-        self.canvas = InteractiveWaveformCanvas(self)
-        self.canvas.seek_requested.connect(self.seek_audio)
-        lay_p2.addWidget(self.canvas, 5)
-
-        lay_play = QHBoxLayout()
-        self.btn_play = QPushButton("Play")
-        self.btn_play.setStyleSheet("background-color: #2196f3; color: white; font-weight: bold; padding: 8px 16px;")
-        self.btn_play.clicked.connect(self.toggle_play)
-
-        btn_stop = QPushButton("Stop")
-        btn_stop.clicked.connect(self.stop_audio)
-
-        lay_play.addWidget(self.btn_play)
-        lay_play.addWidget(btn_stop)
-
-        self.lbl_vol_db = QLabel(" Gain: 0.0 dB")
-        lay_play.addWidget(self.lbl_vol_db)
-
-        self.slider_vol_db = QSlider(Qt.Horizontal)
-        self.slider_vol_db.setRange(-30, 18)
-        self.slider_vol_db.setValue(int(self.settings.get("default_volume_db", 0.0)))
-        self.slider_vol_db.setFixedWidth(100)
-        self.slider_vol_db.valueChanged.connect(self.on_volume_db_changed)
-        lay_play.addWidget(self.slider_vol_db)
-
-        self.chk_autoplay = QCheckBox("Auto-Play")
-        self.chk_autoplay.setChecked(self.settings.get("auto_play", False))
-        lay_play.addWidget(self.chk_autoplay)
-
-        self.lbl_timer = QLabel("00:00 / 00:00")
-        self.lbl_timer.setStyleSheet("font-family: monospace; font-size: 13px; font-weight: bold; color: #a5d6a7;")
-        lay_play.addStretch()
-        lay_play.addWidget(self.lbl_timer)
-
-        lay_p2.addLayout(lay_play)
-
-        box_meter = QGroupBox(" Real-Time Audio Metering ")
-        lay_meter = QHBoxLayout(box_meter)
-        self.lbl_lufs = QLabel("LUFS: -0.0 dB")
-        self.lbl_tp = QLabel("True Peak: 0.0 dBTP")
-        self.lbl_peak = QLabel("Peak: 0.0 dB")
-        self.lbl_rms = QLabel("RMS: 0.0 dB")
-
-        self.lbl_lufs.setStyleSheet("font-weight: bold; color: #64b5f6;")
-        self.lbl_tp.setStyleSheet("font-weight: bold; color: #ffb74d;")
-
-        lay_meter.addWidget(self.lbl_lufs)
-        lay_meter.addWidget(self.lbl_tp)
-        lay_meter.addWidget(self.lbl_peak)
-        lay_meter.addWidget(self.lbl_rms)
-        lay_p2.addWidget(box_meter)
-
-        # Pane 3
-        pane3 = QWidget()
-        lay_p3 = QVBoxLayout(pane3); lay_p3.setContentsMargins(0,0,0,0)
-
-        box_list = QGroupBox(" Unclassified File Queue ")
-        lay_list = QVBoxLayout(box_list)
-        self.lbl_queue_count = QLabel("Remaining: 0 Files")
-        self.lbl_queue_count.setStyleSheet("font-weight: bold; color: #81c784;")
-
-        self.list_files = QListWidget()
-        self.list_files.itemSelectionChanged.connect(self.on_file_selected)
-
-        btn_refresh = QPushButton("Refresh List")
-        btn_refresh.clicked.connect(self.refresh_manual_file_list)
-
-        lay_list.addWidget(self.lbl_queue_count)
-        lay_list.addWidget(self.list_files)
-        lay_list.addWidget(btn_refresh)
-        lay_p3.addWidget(box_list, 2)
-
-        box_info = QGroupBox(" Transcribed Text & Actions ")
-        lay_info = QVBoxLayout(box_info)
-
-        self.lbl_file_info = QLabel("Select a file from queue.")
-        self.lbl_file_info.setStyleSheet("font-weight: bold; color: #64b5f6;")
-
-        self.txt_stt = QLineEdit()
-        self.txt_stt.setReadOnly(True)
-        self.txt_stt.setPlaceholderText("Transcribed text cache...")
-
-        lay_sc = QHBoxLayout()
-        self.txt_sc = QLineEdit(); self.txt_sc.setPlaceholderText("Scene (e.g. 6)")
-        self.txt_ct = QLineEdit(); self.txt_ct.setPlaceholderText("Cut (e.g. 1)")
-        lay_sc.addWidget(QLabel("Scene:")); lay_sc.addWidget(self.txt_sc)
-        lay_sc.addWidget(QLabel("Cut:")); lay_sc.addWidget(self.txt_ct)
-
-        btn_move_sc = QPushButton("Move to Scene/Cut (Enter)")
-        btn_move_sc.setStyleSheet("background-color: #4caf50; color: white; font-weight: bold;")
-        btn_move_sc.clicked.connect(self.move_to_scene)
-
-        btn_roomtone = QPushButton("Move to RoomTone (Key: R)")
-        btn_roomtone.clicked.connect(lambda: self.move_to_folder("RoomTone"))
-
-        btn_short = QPushButton("Move to Short_Duration (Key: S)")
-        btn_short.clicked.connect(lambda: self.move_to_folder("Short_Duration"))
-
-        btn_skip = QPushButton("Skip File (Key: Right)")
-        btn_skip.clicked.connect(self.skip_file)
-
-        btn_undo = QPushButton("Undo Last Action (Ctrl+Z)")
-        btn_undo.setStyleSheet("background-color: #ff9800; color: white; font-weight: bold;")
-        btn_undo.clicked.connect(self.undo_last_action)
-
-        lay_info.addWidget(self.lbl_file_info)
-        lay_info.addWidget(self.txt_stt)
-        lay_info.addLayout(lay_sc)
-        lay_info.addWidget(btn_move_sc)
-        lay_info.addWidget(btn_roomtone)
-        lay_info.addWidget(btn_short)
-        lay_info.addWidget(btn_skip)
-        lay_info.addWidget(btn_undo)
-        lay_p3.addWidget(box_info, 3)
-
-        splitter.addWidget(pane1)
-        splitter.addWidget(pane2)
-        splitter.addWidget(pane3)
-        splitter.setSizes([220, 560, 320])
-
-        layout.addWidget(splitter)
+        if self.btn_run_auto: self.btn_run_auto.setEnabled(True)
+        if self.lbl_dash_status: self.lbl_dash_status.setText("System Status: Batch Classification Completed!")
+        dst = self.txt_dst.text() if self.txt_dst else self.settings["dst_dir"]
+        if hasattr(self, 'tree_model'): self.tree_model.setRootPath(os.path.abspath(dst))
 
     def on_volume_db_changed(self, db_value):
-        self.lbl_vol_db.setText(f" Gain: {db_value:+.1f} dB")
+        if self.lbl_vol_db: self.lbl_vol_db.setText(f" Gain: {db_value:+.1f} dB")
         self.apply_volume_db(db_value)
 
     def on_tab_changed(self, index):
@@ -774,8 +716,10 @@ class AudioClassifierApp(QMainWindow):
 
     def refresh_manual_file_list(self):
         self.stop_audio()
-        unclassified_dir = os.path.abspath(os.path.join(self.txt_dst.text(), "Unclassified_Manual_Review"))
+        dst = self.txt_dst.text() if self.txt_dst else self.settings["dst_dir"]
+        unclassified_dir = os.path.abspath(os.path.join(dst, "Unclassified_Manual_Review"))
 
+        if not self.list_files: return
         self.list_files.blockSignals(True)
         self.list_files.clear()
 
@@ -799,9 +743,9 @@ class AudioClassifierApp(QMainWindow):
                 except Exception:
                     self.list_files.addItem(QListWidgetItem(f))
 
-            self.lbl_queue_count.setText(f"Remaining: {len(files)} Files")
+            if self.lbl_queue_count: self.lbl_queue_count.setText(f"Remaining: {len(files)} Files")
         else:
-            self.lbl_queue_count.setText("Remaining: 0 Files")
+            if self.lbl_queue_count: self.lbl_queue_count.setText("Remaining: 0 Files")
 
         self.list_files.blockSignals(False)
         if self.list_files.count() > 0:
@@ -811,16 +755,18 @@ class AudioClassifierApp(QMainWindow):
 
     def on_file_selected(self):
         self.stop_audio()
+        if not self.list_files: return
         item = self.list_files.currentItem()
         if not item:
-            self.lbl_file_info.setText("No unclassified files remaining.")
-            self.txt_stt.clear()
+            if self.lbl_file_info: self.lbl_file_info.setText("No unclassified files remaining.")
+            if self.txt_stt: self.txt_stt.clear()
             return
 
         raw_text = item.text()
         filename = raw_text.replace("[DUPLICATE] ", "").strip()
 
-        unclassified_dir = os.path.abspath(os.path.join(self.txt_dst.text(), "Unclassified_Manual_Review"))
+        dst = self.txt_dst.text() if self.txt_dst else self.settings["dst_dir"]
+        unclassified_dir = os.path.abspath(os.path.join(dst, "Unclassified_Manual_Review"))
         file_path = os.path.abspath(os.path.join(unclassified_dir, filename))
         self.current_audio_file = file_path
 
@@ -828,30 +774,34 @@ class AudioClassifierApp(QMainWindow):
         speech_spans = cache_data.get('speech_timestamps', []) if cache_data else []
         transcribed_text = cache_data.get('transcribed_text', '') if cache_data else ''
 
+        stt_m = self.cmb_stt.currentText() if self.cmb_stt else "large-v3-turbo"
         if not transcribed_text:
-            transcribed_text = run_stt_no_hallucination(file_path, model_size=self.cmb_stt.currentText())
+            transcribed_text = run_stt_no_hallucination(file_path, model_size=stt_m)
             if cache_data:
                 cache_data['transcribed_text'] = transcribed_text
                 cache_mgr.save_cache(filename, cache_data)
 
-        self.txt_stt.setText(transcribed_text)
+        if self.txt_stt: self.txt_stt.setText(transcribed_text)
 
-        audio_data, sr = process_audio_pipeline(file_path, gain_db=self.spn_gain.value())
+        gain_v = self.spn_gain.value() if self.spn_gain else 0.0
+        crop_v = self.spn_crop.value() if self.spn_crop else 15
+
+        audio_data, sr = process_audio_pipeline(file_path, gain_db=gain_v)
         self.total_duration_sec = len(audio_data) / float(sr)
 
         lufs, tp, pk, rms = calculate_audio_metering(audio_data, sr)
-        self.lbl_lufs.setText(f"LUFS: {lufs:.1f} dB")
-        self.lbl_tp.setText(f"True Peak: {tp:.1f} dBTP")
-        self.lbl_peak.setText(f"Peak: {pk:.1f} dB")
-        self.lbl_rms.setText(f"RMS: {rms:.1f} dB")
+        if self.lbl_lufs: self.lbl_lufs.setText(f"LUFS: {lufs:.1f} dB")
+        if self.lbl_tp: self.lbl_tp.setText(f"True Peak: {tp:.1f} dBTP")
+        if self.lbl_peak: self.lbl_peak.setText(f"Peak: {pk:.1f} dB")
+        if self.lbl_rms: self.lbl_rms.setText(f"RMS: {rms:.1f} dB")
 
-        self.canvas.plot_waveform_with_vad(audio_data, sr, speech_spans, self.spn_crop.value())
-        self.lbl_file_info.setText(f"File: {filename} | Duration: {self.total_duration_sec:.1f}s")
+        self.canvas.plot_waveform_with_vad(audio_data, sr, speech_spans, crop_v)
+        if self.lbl_file_info: self.lbl_file_info.setText(f"File: {filename} | Duration: {self.total_duration_sec:.1f}s")
 
         self.media_player.setSource(QUrl.fromLocalFile(file_path))
         self.update_timer_label(0.0)
 
-        if self.chk_autoplay.isChecked():
+        if self.chk_autoplay and self.chk_autoplay.isChecked():
             self.toggle_play()
 
     def sync_playhead(self):
@@ -864,23 +814,23 @@ class AudioClassifierApp(QMainWindow):
     def update_timer_label(self, cur_sec):
         cur_m, cur_s = int(cur_sec // 60), int(cur_sec % 60)
         tot_m, tot_s = int(self.total_duration_sec // 60), int(self.total_duration_sec % 60)
-        self.lbl_timer.setText(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+        if self.lbl_timer: self.lbl_timer.setText(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
 
     def toggle_play(self):
         if self.media_player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.media_player.pause()
             self.play_timer.stop()
-            self.btn_play.setText("Play")
+            if self.btn_play: self.btn_play.setText("Play")
         else:
             self.media_player.play()
             self.play_timer.start()
-            self.btn_play.setText("Pause")
+            if self.btn_play: self.btn_play.setText("Pause")
 
     def stop_audio(self):
         self.media_player.stop()
         self.media_player.setSource(QUrl())
         self.play_timer.stop()
-        self.btn_play.setText("Play")
+        if self.btn_play: self.btn_play.setText("Play")
         self.canvas.update_playhead_pos(0.0)
         self.update_timer_label(0.0)
 
@@ -890,8 +840,8 @@ class AudioClassifierApp(QMainWindow):
         self.update_timer_label(target_sec)
 
     def move_to_scene(self):
-        sc = self.txt_sc.text().strip()
-        ct = self.txt_ct.text().strip()
+        sc = self.txt_sc.text().strip() if self.txt_sc else ""
+        ct = self.txt_ct.text().strip() if self.txt_ct else ""
         if not sc.isdigit():
             QMessageBox.warning(self, "Warning", "Scene number must be numeric.")
             return
@@ -901,10 +851,11 @@ class AudioClassifierApp(QMainWindow):
 
         self.move_to_folder("_".join(parts))
 
-        self.txt_sc.setText(sc)
-        self.txt_ct.setText(str(cut_num + 1))
+        if self.txt_sc: self.txt_sc.setText(sc)
+        if self.txt_ct: self.txt_ct.setText(str(cut_num + 1))
 
     def move_to_folder(self, target_subfolder):
+        if not self.list_files: return
         item = self.list_files.currentItem()
         if not item: return
         raw_text = item.text()
@@ -913,18 +864,15 @@ class AudioClassifierApp(QMainWindow):
         self.stop_audio()
         QApplication.processEvents()
 
-        unclassified_dir = os.path.abspath(os.path.join(self.txt_dst.text(), "Unclassified_Manual_Review"))
+        dst = self.txt_dst.text() if self.txt_dst else self.settings["dst_dir"]
+        unclassified_dir = os.path.abspath(os.path.join(dst, "Unclassified_Manual_Review"))
         src_path = os.path.join(unclassified_dir, filename)
 
-        dst_dir = os.path.abspath(os.path.join(self.txt_dst.text(), target_subfolder))
+        dst_dir = os.path.abspath(os.path.join(dst, target_subfolder))
         os.makedirs(dst_dir, exist_ok=True)
 
-        is_copy_mode = "Copy" in self.cmb_action_mode.currentText()
-        prefix = self.txt_prefix.text().strip()
-        postfix = self.txt_postfix.text().strip()
-        strategy = self.cmb_naming_strat.currentText()
-
-        out_name = format_destination_filename(filename, target_subfolder if "Scene" in target_subfolder else None, prefix, postfix, strategy)
+        is_copy_mode = True
+        out_name = format_destination_filename(filename, target_subfolder if "Scene" in target_subfolder else None, "", "", "Parsed Scene Name")
         dst_path = os.path.join(dst_dir, out_name)
 
         try:
@@ -964,284 +912,20 @@ class AudioClassifierApp(QMainWindow):
             self.refresh_manual_file_list()
 
     def skip_file(self):
+        if not self.list_files: return
         row = self.list_files.currentRow()
         if row < self.list_files.count() - 1:
             self.list_files.setCurrentRow(row + 1)
 
-    # -------------------------------------------------------------------------
-    # TAB 3: Voice Enhancement Workstation
-    # -------------------------------------------------------------------------
-    def setup_enhance_tab(self):
-        layout = QVBoxLayout(self.tab_enhance)
-        splitter_enh = QSplitter(Qt.Horizontal)
-
-        pane1 = QWidget()
-        lay_p1 = QVBoxLayout(pane1); lay_p1.setContentsMargins(0,0,0,0)
-        box_tree = QGroupBox(" Destination Directory Tree ")
-        lay_tree = QVBoxLayout(box_tree)
-
-        self.tree_view_enh = QTreeView()
-        self.tree_view_enh.setModel(self.tree_model)
-        root_path = os.path.abspath(self.settings["dst_dir"])
-        self.tree_view_enh.setRootIndex(self.tree_model.index(root_path))
-        self.tree_view_enh.setHeaderHidden(True)
-        self.tree_view_enh.setColumnHidden(1, True)
-        self.tree_view_enh.setColumnHidden(2, True)
-        self.tree_view_enh.setColumnHidden(3, True)
-
-        lay_tree.addWidget(self.tree_view_enh)
-        lay_p1.addWidget(box_tree)
-
-        pane2 = QWidget()
-        lay_p2 = QVBoxLayout(pane2); lay_p2.setContentsMargins(0,0,0,0)
-
-        self.canvas_enh = InteractiveWaveformCanvas(self)
-        self.canvas_enh.seek_requested.connect(self.seek_audio)
-        lay_p2.addWidget(self.canvas_enh, 5)
-
-        box_meter_enh = QGroupBox(" Audio Metering ")
-        lay_m_enh = QHBoxLayout(box_meter_enh)
-        self.lbl_lufs_enh = QLabel("LUFS: -0.0 dB")
-        self.lbl_tp_enh = QLabel("True Peak: 0.0 dBTP")
-        lay_m_enh.addWidget(self.lbl_lufs_enh)
-        lay_m_enh.addWidget(self.lbl_tp_enh)
-        lay_p2.addWidget(box_meter_enh)
-
-        pane3 = QWidget()
-        lay_p3 = QVBoxLayout(pane3); lay_p3.setContentsMargins(0,0,0,0)
-
-        box_ctrl = QGroupBox(" Voice Enhancement & Studio Restoration ")
-        lay_ctrl = QVBoxLayout(box_ctrl)
-
-        self.cmb_enh_model = QComboBox()
-        self.cmb_enh_model.addItems([
-            "DeepFilterNet3 (Ultra-Fast 48kHz)",
-            "DeepFilterNet2 (48kHz Legacy)",
-            "Alibaba ClearVoice MossFormer2 (48kHz)",
-            "Alibaba ClearVoice FRCRN (16kHz)",
-            "RNNoise (Lightweight Neural Suppressor)"
-        ])
-
-        btn_run_enhance = QPushButton("Run Voice Enhancement on Selected File")
-        btn_run_enhance.setStyleSheet("background-color: #4caf50; color: white; font-weight: bold; padding: 10px;")
-        btn_run_enhance.clicked.connect(self.run_voice_enhancement)
-
-        lay_ctrl.addWidget(QLabel("Select AI Restoration Model:"))
-        lay_ctrl.addWidget(self.cmb_enh_model)
-        lay_ctrl.addWidget(btn_run_enhance)
-        lay_ctrl.addStretch()
-
-        lay_p3.addWidget(box_ctrl)
-
-        splitter_enh.addWidget(pane1)
-        splitter_enh.addWidget(pane2)
-        splitter_enh.addWidget(pane3)
-        splitter_enh.setSizes([220, 560, 320])
-
-        layout.addWidget(splitter_enh)
-
-    def run_voice_enhancement(self):
-        item = self.list_files.currentItem()
-        if not item:
-            QMessageBox.warning(self, "No File Selected", "Select a file from Manual Review list first.")
-            return
-
-        filename = item.text().replace("[DUPLICATE] ", "").strip()
-        unclassified_dir = os.path.abspath(os.path.join(self.txt_dst.text(), "Unclassified_Manual_Review"))
-        file_path = os.path.join(unclassified_dir, filename)
-
-        orig_data, sr1 = process_audio_pipeline(file_path)
-
-        lufs, tp, pk, rms = calculate_audio_metering(orig_data, sr1)
-        self.lbl_lufs_enh.setText(f"LUFS: {lufs:.1f} dB")
-        self.lbl_tp_enh.setText(f"True Peak: {tp:.1f} dBTP")
-
-        self.canvas_enh.plot_waveform_with_vad(orig_data, sr1, [], 0)
-        QMessageBox.information(self, "Enhancement Applied", f"Processed {filename} using {self.cmb_enh_model.currentText()}.")
-
-    # -------------------------------------------------------------------------
-    # TAB 4: Settings & Hardware
-    # -------------------------------------------------------------------------
-    def setup_settings_tab(self):
-        layout = QHBoxLayout(self.tab_settings)
-        splitter_set = QSplitter(Qt.Horizontal)
-
-        self.list_set_nav = QListWidget()
-        self.list_set_nav.addItems([
-            "01. Directories & Storage",
-            "02. File Operations & Naming",
-            "03. STT Prompt & Model Settings",
-            "04. Global Pipeline Order"
-        ])
-        self.list_set_nav.currentRowChanged.connect(self.on_settings_page_changed)
-
-        self.stack_set = QStackedWidget()
-
-        # Page 1
-        p1 = QWidget()
-        lay_p1 = QVBoxLayout(p1)
-        self.set_src = QLineEdit(os.path.abspath(self.settings["src_dir"]))
-        self.set_dst = QLineEdit(os.path.abspath(self.settings["dst_dir"]))
-        lay_p1.addWidget(QLabel("Default Source Directory:")); lay_p1.addWidget(self.set_src)
-        lay_p1.addWidget(QLabel("Default Target Directory:")); lay_p1.addWidget(self.set_dst)
-        lay_p1.addStretch()
-
-        # Page 2
-        p2 = QWidget()
-        lay_p2 = QVBoxLayout(p2)
-
-        self.cmb_action_mode = QComboBox()
-        self.cmb_action_mode.addItems(["Copy (Keep Original)", "Move (Transfer File)"])
-        lay_p2.addWidget(QLabel("File Action Mode:")); lay_p2.addWidget(self.cmb_action_mode)
-
-        self.txt_prefix = QLineEdit(self.settings.get("filename_prefix", ""))
-        self.txt_prefix.textChanged.connect(self.update_naming_preview_table)
-        self.txt_postfix = QLineEdit(self.settings.get("filename_postfix", ""))
-        self.txt_postfix.textChanged.connect(self.update_naming_preview_table)
-        self.cmb_naming_strat = QComboBox()
-        self.cmb_naming_strat.addItems(["Parsed Scene Name", "Original Filename", "Combined Name", "Numbered Index"])
-        self.cmb_naming_strat.currentIndexChanged.connect(self.update_naming_preview_table)
-
-        lay_p2.addWidget(QLabel("Prefix:")); lay_p2.addWidget(self.txt_prefix)
-        lay_p2.addWidget(QLabel("Postfix:")); lay_p2.addWidget(self.txt_postfix)
-        lay_p2.addWidget(QLabel("Naming Strategy:")); lay_p2.addWidget(self.cmb_naming_strat)
-
-        box_prev = QGroupBox(" Live Naming Rule Preview Table ")
-        lay_prev = QVBoxLayout(box_prev)
-        self.tbl_preview = QTableWidget(2, 2)
-        self.tbl_preview.setHorizontalHeaderLabels(["Original Input", "Formatted Output Name"])
-        self.tbl_preview.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        lay_prev.addWidget(self.tbl_preview)
-        lay_p2.addWidget(box_prev)
-
-        # Page 3
-        p3 = QWidget()
-        lay_p3 = QVBoxLayout(p3)
-
-        self.chk_prompt_enable = QCheckBox("Enable Initial Prompt Injection")
-        self.chk_prompt_enable.setChecked(self.settings.get("stt_prompt_enabled", True))
-
-        self.txt_prompt = QTextEdit()
-        self.txt_prompt.setPlainText(self.settings.get("stt_initial_prompt", "현장 동시녹음 슬레이트 콜: 씬, 컷, 테이크, Scene, Cut, Take."))
-        self.txt_prompt.setMaximumHeight(80)
-
-        lay_presets = QHBoxLayout()
-        btn_p_slate = QPushButton("Slate Keyword Preset")
-        btn_p_slate.clicked.connect(lambda: self.txt_prompt.setPlainText("현장 동시녹음 슬레이트 콜: 씬, 컷, 테이크, Scene, Cut, Take."))
-        btn_p_speech = QPushButton("General Speech Preset")
-        btn_p_speech.clicked.connect(lambda: self.txt_prompt.setPlainText("한국어 현장 녹음 대화 내용입니다."))
-        btn_p_clear = QPushButton("Clear / Empty")
-        btn_p_clear.clicked.connect(lambda: self.txt_prompt.clear())
-
-        lay_presets.addWidget(btn_p_slate)
-        lay_presets.addWidget(btn_p_speech)
-        lay_presets.addWidget(btn_p_clear)
-
-        lay_p3.addWidget(self.chk_prompt_enable)
-        lay_p3.addWidget(QLabel("Custom STT Initial Prompt:"))
-        lay_p3.addWidget(self.txt_prompt)
-        lay_p3.addLayout(lay_presets)
-        lay_p3.addStretch()
-
-        # Page 4
-        p4 = QWidget()
-        lay_p4 = QVBoxLayout(p4)
-        lay_p4.addWidget(QLabel("Drag or use Move Up/Down buttons to re-order execution stages:"))
-
-        self.list_pipe = QListWidget()
-        pipeline_items = self.settings.get("pipeline_order", [
-            "Gain Boost", "Soft Highpass (40Hz)", "VAD Speech Anchoring (+1s Pad)", "STT Transcription"
-        ])
-        self.list_pipe.addItems(pipeline_items)
-
-        h_btn_pipe = QHBoxLayout()
-        btn_up = QPushButton("Move Up"); btn_up.clicked.connect(self.move_pipeline_up)
-        btn_down = QPushButton("Move Down"); btn_down.clicked.connect(self.move_pipeline_down)
-        btn_reset_p = QPushButton("Reset Default Order"); btn_reset_p.clicked.connect(self.reset_pipeline_order)
-
-        h_btn_pipe.addWidget(btn_up)
-        h_btn_pipe.addWidget(btn_down)
-        h_btn_pipe.addWidget(btn_reset_p)
-
-        lay_p4.addWidget(self.list_pipe)
-        lay_p4.addLayout(h_btn_pipe)
-        lay_p4.addStretch()
-
-        self.stack_set.addWidget(p1)
-        self.stack_set.addWidget(p2)
-        self.stack_set.addWidget(p3)
-        self.stack_set.addWidget(p4)
-
-        splitter_set.addWidget(self.list_set_nav)
-        splitter_set.addWidget(self.stack_set)
-        splitter_set.setSizes([200, 600])
-
-        box_container = QGroupBox(" System Configurations ")
-        lay_c = QVBoxLayout(box_container)
-        lay_c.addWidget(splitter_set)
-
-        btn_save = QPushButton("Save Settings to settings.json")
-        btn_save.setStyleSheet("background-color: #2196f3; color: white; font-weight: bold; padding: 10px;")
-        btn_save.clicked.connect(self.save_settings)
-
-        lay_c.addWidget(btn_save)
-        layout.addWidget(box_container)
-
-        self.list_set_nav.setCurrentRow(0)
-        self.update_naming_preview_table()
-
-    def on_settings_page_changed(self, row):
-        self.stack_set.setCurrentIndex(row)
-
-    def update_naming_preview_table(self):
-        prefix = self.txt_prefix.text().strip()
-        postfix = self.txt_postfix.text().strip()
-        strategy = self.cmb_naming_strat.currentText()
-
-        sample_cases = [
-            ("251207_008_Tr1.WAV", "Scene_06_Cut_01"),
-            ("TEST_AUDIO_TAKE.WAV", "Scene_01_Cut_03")
-        ]
-
-        for r, (orig, parsed) in enumerate(sample_cases):
-            out_name = format_destination_filename(orig, parsed, prefix, postfix, strategy, r+1)
-            self.tbl_preview.setItem(r, 0, QTableWidgetItem(orig))
-            self.tbl_preview.setItem(r, 1, QTableWidgetItem(out_name))
-
-    def move_pipeline_up(self):
-        row = self.list_pipe.currentRow()
-        if row > 0:
-            item = self.list_pipe.takeItem(row)
-            self.list_pipe.insertItem(row - 1, item)
-            self.list_pipe.setCurrentRow(row - 1)
-
-    def move_pipeline_down(self):
-        row = self.list_pipe.currentRow()
-        if row < self.list_pipe.count() - 1:
-            item = self.list_pipe.takeItem(row)
-            self.list_pipe.insertItem(row + 1, item)
-            self.list_pipe.setCurrentRow(row + 1)
-
-    def reset_pipeline_order(self):
-        self.list_pipe.clear()
-        self.list_pipe.addItems(["Gain Boost", "Soft Highpass (40Hz)", "VAD Speech Anchoring (+1s Pad)", "STT Transcription"])
-
     def save_settings(self):
-        self.settings["src_dir"] = os.path.abspath(self.txt_src.text())
-        self.settings["dst_dir"] = os.path.abspath(self.txt_dst.text())
-        self.settings["default_volume_db"] = float(self.slider_vol_db.value())
-        self.settings["auto_play"] = self.chk_autoplay.isChecked()
-        self.settings["file_action_mode"] = self.cmb_action_mode.currentText()
-        self.settings["filename_prefix"] = self.txt_prefix.text()
-        self.settings["filename_postfix"] = self.txt_postfix.text()
-        self.settings["naming_strategy"] = self.cmb_naming_strat.currentText()
-        self.settings["gain_boost_db"] = self.spn_gain.value()
+        if self.txt_src: self.settings["src_dir"] = os.path.abspath(self.txt_src.text())
+        if self.txt_dst: self.settings["dst_dir"] = os.path.abspath(self.txt_dst.text())
+        if self.slider_vol_db: self.settings["default_volume_db"] = float(self.slider_vol_db.value())
+        if self.chk_autoplay: self.settings["auto_play"] = self.chk_autoplay.isChecked()
+        if self.spn_gain: self.settings["gain_boost_db"] = self.spn_gain.value()
 
-        self.settings["stt_prompt_enabled"] = self.chk_prompt_enable.isChecked()
-        self.settings["stt_initial_prompt"] = self.txt_prompt.toPlainText().strip()
-
-        pipe_order = [self.list_pipe.item(i).text() for i in range(self.list_pipe.count())]
-        self.settings["pipeline_order"] = pipe_order
+        if self.chk_prompt_enable: self.settings["stt_prompt_enabled"] = self.chk_prompt_enable.isChecked()
+        if self.txt_prompt: self.settings["stt_initial_prompt"] = self.txt_prompt.toPlainText().strip()
 
         if save_settings_to_file(self.settings):
             QMessageBox.information(self, "Success", "Settings saved successfully to settings.json.")

@@ -10,12 +10,8 @@ import torch
 import torchaudio.functional as F
 from faster_whisper import WhisperModel
 
-# Suppress HuggingFace Symlink Warning on Windows
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
-# =============================================================================
-# Absolute Path Anchoring
-# =============================================================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
 DEFAULT_CACHE_DIR = os.path.join(BASE_DIR, "caches")
@@ -63,7 +59,6 @@ def save_settings_to_file(settings_dict):
     except Exception:
         return False
 
-# Global AI Model Singletons
 vad_model = None
 stt_model = None
 current_stt_model_size = None
@@ -109,10 +104,6 @@ def load_ai_models(model_size="large-v3-turbo", vad_choice="Silero VAD v5", devi
     current_device = target_device
     log_func(f"[SUCCESS] AI Models Loaded. (Target Device: {target_device.upper()})")
 
-
-# =============================================================================
-# Audio Preprocessing & Pipeline
-# =============================================================================
 def apply_gain_boost(data, gain_db):
     if len(data) == 0 or gain_db == 0.0: return data
     gain_factor = 10 ** (gain_db / 20.0)
@@ -174,31 +165,19 @@ def get_padded_speech_timestamps(wav_tensor, vad_model, sr=16000, pad_sec=1.0, t
 
     return padded_spans
 
-
-# =============================================================================
-# Slate Parsing & Normalization
-# =============================================================================
 def refine_transcribed_slate_text(text):
     if not text: return ""
 
     corrections = {
-        r'\b신\b': '씬',
-        r'\b씬아\b': '씬',
-        r'\b컷트\b': '컷',
-        r'\b커\b': '컷',
-        r'\b테익\b': '테이크',
-        r'\b텍\b': '테이크',
-        r'\b태이크\b': '테이크',
-        r'\b원\b': '1',
-        r'\b투\b': '2',
-        r'\b쓰리\b': '3',
-        r'\b포\b': '4',
+        r'\b신\b': '씬', r'\b씬아\b': '씬', r'\b컷트\b': '컷',
+        r'\b커\b': '컷', r'\b테익\b': '테이크', r'\b텍\b': '테이크',
+        r'\b태이크\b': '테이크', r'\b원\b': '1', r'\b투\b': '2',
+        r'\b쓰리\b': '3', r'\b포\b': '4',
     }
     for pattern, replacement in corrections.items():
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
 
-    text = convert_korean_numbers_to_digits(text)
-    return text
+    return convert_korean_numbers_to_digits(text)
 
 def convert_korean_numbers_to_digits(text):
     num_map = {
@@ -253,13 +232,8 @@ def format_destination_filename(original_name, parsed_scene, prefix, postfix, st
         core = base
     return f"{prefix}{core}{postfix}{ext}"
 
-
-# =============================================================================
-# Audio Metering & Fingerprinting
-# =============================================================================
 def calculate_audio_metering(data, sr):
-    if len(data) == 0:
-        return -70.0, -70.0, -70.0, -70.0
+    if len(data) == 0: return -70.0, -70.0, -70.0, -70.0
 
     abs_max = np.max(np.abs(data))
     peak_db = 20 * np.log10(abs_max + 1e-12)
@@ -290,12 +264,9 @@ def compute_audio_fingerprint(data, sr):
     dur_bin = int(len(data) / float(sr) * 10)
     return f"{dur_bin}_{int(mean_val*10000)}_{int(std_val*10000)}"
 
-
-# Cache Manager with Absolute Pathing
 class CacheManager:
     def __init__(self, cache_dir=None):
-        if cache_dir is None:
-            cache_dir = DEFAULT_CACHE_DIR
+        if cache_dir is None: cache_dir = DEFAULT_CACHE_DIR
         self.cache_dir = os.path.abspath(cache_dir)
         os.makedirs(self.cache_dir, exist_ok=True)
 
@@ -323,10 +294,6 @@ class CacheManager:
 
 cache_mgr = CacheManager(DEFAULT_CACHE_DIR)
 
-
-# =============================================================================
-# STT Pipeline Execution
-# =============================================================================
 def run_stt_no_hallucination(file_path, lang_choice="ko", model_size="large-v3-turbo", device_choice="Auto"):
     settings = load_settings()
     load_ai_models(model_size=model_size, device_choice=device_choice)
