@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1400</width>
-    <height>800</height>
+    <width>1405</width>
+    <height>802</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -209,7 +209,7 @@
             <item row="2" column="0">
              <widget class="QLabel" name="label_4">
               <property name="text">
-               <string>TextLabel</string>
+               <string>disable short duration</string>
               </property>
              </widget>
             </item>
@@ -221,7 +221,26 @@
              </widget>
             </item>
             <item row="3" column="1">
-             <widget class="QComboBox" name="combo_vad"/>
+             <widget class="QComboBox" name="combo_vad">
+              <property name="currentIndex">
+               <number>1</number>
+              </property>
+              <item>
+               <property name="text">
+                <string>FireRed (Heavy)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Silero (Balenced)</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>WebRTC (Light)</string>
+               </property>
+              </item>
+             </widget>
             </item>
             <item row="2" column="3">
              <widget class="QComboBox" name="combo_stt"/>
@@ -394,19 +413,99 @@
          </rect>
         </property>
         <layout class="QGridLayout" name="gridLayout_5">
-         <item row="0" column="0">
-          <widget class="QTabWidget" name="tabWidget_2">
+         <item row="1" column="0">
+          <widget class="QPushButton" name="pushButton_3">
+           <property name="text">
+            <string>Apply change</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QPushButton" name="pushButton_4">
+           <property name="text">
+            <string>exit with out change</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="0" colspan="2">
+          <widget class="QTabWidget" name="settingQwidget">
            <property name="currentIndex">
-            <number>0</number>
+            <number>1</number>
            </property>
            <widget class="QWidget" name="FileSet">
             <attribute name="title">
-             <string>Tab 1</string>
+             <string>File Management</string>
+            </attribute>
+            <widget class="QWidget" name="gridLayoutWidget_2">
+             <property name="geometry">
+              <rect>
+               <x>0</x>
+               <y>0</y>
+               <width>641</width>
+               <height>159</height>
+              </rect>
+             </property>
+             <layout class="QGridLayout" name="gridLayout_6">
+              <item row="2" column="0" colspan="2">
+               <widget class="QLabel" name="label_6">
+                <property name="text">
+                 <string>General export folder</string>
+                </property>
+               </widget>
+              </item>
+              <item row="3" column="0">
+               <widget class="QLineEdit" name="lineEdit_2"/>
+              </item>
+              <item row="3" column="1">
+               <widget class="QPushButton" name="pushButton_6">
+                <property name="text">
+                 <string>Find</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="1">
+               <widget class="QPushButton" name="pushButton_5">
+                <property name="text">
+                 <string>Find</string>
+                </property>
+               </widget>
+              </item>
+              <item row="1" column="0">
+               <widget class="QLineEdit" name="lineEdit"/>
+              </item>
+              <item row="0" column="0" colspan="2">
+               <widget class="QLabel" name="label_5">
+                <property name="text">
+                 <string>General source folder</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </widget>
+           <widget class="QWidget" name="Model">
+            <attribute name="title">
+             <string>Model Management</string>
+            </attribute>
+           </widget>
+           <widget class="QWidget" name="tab">
+            <attribute name="title">
+             <string>Page</string>
             </attribute>
            </widget>
            <widget class="QWidget" name="tab_2">
             <attribute name="title">
-             <string>Tab 2</string>
+             <string>Page</string>
+            </attribute>
+           </widget>
+           <widget class="QWidget" name="tab_3">
+            <attribute name="title">
+             <string>Page</string>
+            </attribute>
+           </widget>
+           <widget class="QWidget" name="generalset">
+            <attribute name="title">
+             <string>General Settings</string>
             </attribute>
            </widget>
           </widget>

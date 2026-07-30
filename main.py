@@ -29,12 +29,13 @@ class AudioSortWorker(QThread):
     progress_signal = Signal(int)
     finished_signal = Signal()
 
-    def __init__(self, selected_files, src_dir, dst_dir, processor, threshold):
+    def __init__(self, selected_files, src_dir, dst_dir, processor, threshold, vad_type):
         super().__init__()
         self.selected_files = selected_files
         self.src_dir = src_dir
         self.dst_dir = dst_dir
         self.processor = processor
+        self.vad_type = vad_type
         self.threshold = threshold
 
     # [스레드 실제 실행 본체 / Run actual thread body]
@@ -53,7 +54,7 @@ class AudioSortWorker(QThread):
                 continue
 
             scaled_data, sr = self.processor.preprocess_and_detect(full_path)
-            speech_segments = self.processor.run_silero_vad(scaled_data, sr)
+            speech_segments = self.processor.run_selected_vad(scaled_data, sr, self.vad_type)
             voice_ratio = self.processor.calculate_effective_voice_ratio(speech_segments, total_duration)
             
             has_voice = voice_ratio >= self.threshold
@@ -246,7 +247,8 @@ def start_sorting_process():
     src_dir = window.txt_src.text()
     dst_dir = window.txt_dst.text()
     selected_files = get_checked_audio_files()
-    
+    vad_type = window.combo_vad.currentText()
+
     if not selected_files:
         write_log("[Warning] No files selected.")
         return
@@ -256,7 +258,7 @@ def start_sorting_process():
     window.AudioSortStart.setEnabled(False)
 
     global worker
-    worker = AudioSortWorker(selected_files, src_dir, dst_dir, processor, threshold)
+    worker = AudioSortWorker(selected_files, src_dir, dst_dir, processor, threshold, vad_type)
     
     worker.log_signal.connect(write_log)
     worker.status_signal.connect(update_item_status)  # UI Status 칸 실시간 업데이트 연결
