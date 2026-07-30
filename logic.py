@@ -45,7 +45,7 @@ class AudioLogicProcessor:
         self.sample_rate_target = 16000  
         self.highpass_cutoff = 80  
         self.vad_model = None
-
+        self.stt_model = None
         settings = self.load_app_settings()
         self.highpass_cutoff = settings.get("highpass_cutoff", 80.0)
         
@@ -55,11 +55,9 @@ class AudioLogicProcessor:
         self.slate_margin_ratio = value / 100.0
 
     def prepare_audio_for_vad(self, audio_data, sample_rate):
-        # 1. 2채널(스테레오) 이상인 경우 1채널(모노)로 평균 통합
         if audio_data.ndim > 1:
             audio_data = np.mean(audio_data, axis=1)
             
-        # 2. 샘플 레이트가 16000Hz가 아니면 16000Hz로 리샘플링
         target_sr = 16000
         if sample_rate != target_sr:
             num_target_samples = int(len(audio_data) * target_sr / sample_rate)
@@ -144,7 +142,23 @@ class AudioLogicProcessor:
                 return json.load(f)
         return None
 
-
+    def extract_speech_clips(self, audio_data, sample_rate, speech_segments):
+        import numpy as np
+        
+        if not speech_segments:
+            return np.array([], dtype=np.float32)
+            
+        clips = []
+        for seg in speech_segments:
+            start_sec = max(0.0, seg["start"] - 1.0)
+            end_sec = seg["end"] + 1.0
+            
+            start_idx = int(start_sec * sample_rate)
+            end_idx = int(end_sec * sample_rate)
+            
+            clips.append(audio_data[start_idx:end_idx])
+            
+        return np.concatenate(clips) if clips else np.array([], dtype=np.float32)
 
      # [선택된 VAD 모델에 맞춰 음성 감지 실행 / Execute voice activity detection with the selected VAD model]
     def run_selected_vad(self, audio_data, sample_rate, vad_type):
@@ -283,6 +297,7 @@ class AudioLogicProcessor:
 
     @staticmethod
     def copy_to_room_tone(file_name, src_dir, dst_dir):
+
         # 1. 대상 경로 아래에 'room_tone' 폴더 경로 조립
         room_tone_dir = os.path.join(dst_dir, "room_tone")
         
@@ -294,3 +309,95 @@ class AudioLogicProcessor:
 
         if os.path.exists(src_path):
             shutil.copy(src_path, dst_path)
+
+    def run_selected_stt(self, audio_data, stt_type):
+        if "Whisper tiny" in stt_type:
+            return self.run_whisper_tiny_stt(audio_data)
+        elif "Whisper base" in stt_type:
+            return self.run_whisper_base_stt(audio_data)
+        elif "Whisper large-v3" in stt_type:
+            return self.run_whisper_large_v3_stt(audio_data)
+        elif "Whisper large-v3-turbo" in stt_type:
+            return self.run_whisper_large_v3_turbo_stt(audio_data)
+        elif "Canary-Qwen" in stt_type:
+            return self.run_canary_qwen_stt(audio_data)
+        elif "Qwen3" in stt_type:
+            return self.run_qwen3_stt(audio_data)
+
+    # [로컬 Whisper tiny 모델 구동 및 대사 추출 / Run offline Whisper tiny model and transcribe text]
+    def run_whisper_tiny_stt(self, audio_data):
+        from faster_whisper import WhisperModel
+        import torch
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
+        local_dir = os.path.join(base_dir, "Whisper")
+        model_path = os.path.join(local_dir, "tiny")
+        os.makedirs(model_path, exist_ok=True)
+        transcription = ""
+        if self.stt_model is None:
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device_type == "cuda" else "float32"
+            self.stt_model = WhisperModel("tiny", device=device_type, compute_type=compute_type,cache_dir = base_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+        for segment in segments:
+            transcription += segment.text
+        return transcription.strip()
+
+    # [로컬 Whisper base 모델 구동 및 대사 추출 / Run offline Whisper base model and transcribe text]
+    def run_whisper_base_stt(self, audio_data):
+        from faster_whisper import WhisperModel
+        import torch
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
+        local_dir = os.path.join(base_dir, "Whisper")
+        model_path = os.path.join(local_dir, "base")
+        os.makedirs(model_path, exist_ok=True)
+        transcription = ""
+        if self.stt_model is None:
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device_type == "cuda" else "float32"
+            self.stt_model = WhisperModel("base", device=device_type, compute_type=compute_type,cache_dir = base_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+        for segment in segments:
+            transcription += segment.text
+        return transcription.strip()
+    
+    # [로컬 Whisper large v3 모델 구동 및 대사 추출 / Run offline Whisper large v3 model and transcribe text]
+    def run_whisper_large_v3_stt(self, audio_data):
+        from faster_whisper import WhisperModel
+        import torch
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
+        local_dir = os.path.join(base_dir, "Whisper")
+        model_path = os.path.join(local_dir, "large-v3")
+        os.makedirs(model_path, exist_ok=True)
+        transcription = ""
+        if self.stt_model is None:
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device_type == "cuda" else "float32"
+            self.stt_model = WhisperModel("large-v3", device=device_type, compute_type=compute_type,cache_dir = base_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+        for segment in segments:
+            transcription += segment.text
+        return transcription.strip()
+    
+    # [로컬 Whisper large v3 turbo 모델 구동 및 대사 추출 / Run offline Whisper large v3 turbo`` model and transcribe text]
+    def run_whisper_large_v3_turbo_stt(self, audio_data):
+        from faster_whisper import WhisperModel
+        import torch
+        transcription = ""
+        if self.stt_model is None:
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            compute_type = "float16" if device_type == "cuda" else "float32"
+            self.stt_model = WhisperModel("large-v3-turbo", device=device_type, compute_type=compute_type)
+        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+        for segment in segments:
+            transcription += segment.text
+        return transcription.strip()
+
+
+    # [Canary-Qwen 2.5B 모델 구동 / Run Canary-Qwen 2.5B model]
+    def run_canary_qwen_stt(self, audio_data):
+        return ""
+
+    # [Qwen3-ASR 1.7B 모델 구동 / Run Qwen3-ASR 1.7B model]
+    def run_qwen3_stt(self, audio_data):
+        return ""
+

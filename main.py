@@ -27,9 +27,10 @@ class AudioSortWorker(QThread):
     log_signal = Signal(str)
     status_signal = Signal(str, str) 
     progress_signal = Signal(int)
-    finished_signal = Signal()
+    finished_signal = Signal(int, float)
 
-    def __init__(self, selected_files, src_dir, dst_dir, processor, threshold, vad_type):
+    # [작업자 인스턴스 초기화 / Initialize worker instance]
+    def __init__(self, selected_files, src_dir, dst_dir, processor, threshold, vad_type, stt_type):
         super().__init__()
         self.selected_files = selected_files
         self.src_dir = src_dir
@@ -37,20 +38,24 @@ class AudioSortWorker(QThread):
         self.processor = processor
         self.vad_type = vad_type
         self.threshold = threshold
+        self.stt_type = stt_type
 
     # [스레드 실제 실행 본체 / Run actual thread body]
     def run(self):
+        import time
+        start_time = time.time()
+        roomtone_count = 0
         total_count = len(self.selected_files)
         
         for index, file_name in enumerate(self.selected_files):
             full_path = os.path.join(self.src_dir, file_name)
             total_duration = sf.info(full_path).duration
-            
+
             if self.processor.is_audio_too_short(total_duration, min_limit=1.0):
                 cache_data = {"file_name": file_name, "status": "Too Short"}
                 self.processor.save_cache_json(self.dst_dir, file_name, cache_data)
                 self.status_signal.emit(file_name, "Too Short")
-                self.log_signal.emit(f"[Skip] File too short: {file_name}")
+                self.log_signal.emit(f"{file_name} SHORT DURATION")
                 continue
 
             scaled_data, sr = self.processor.preprocess_and_detect(full_path)
@@ -59,6 +64,13 @@ class AudioSortWorker(QThread):
             
             has_voice = voice_ratio >= self.threshold
             status_str = "Classified" if has_voice else "Room Tone"
+            stt_text = "" 
+
+            if has_voice:
+                speech_clip = self.processor.extract_speech_clips(scaled_data, sr, speech_segments)
+                
+                if len(speech_clip) > 0:
+                    stt_text = self.processor.run_selected_stt(speech_clip, self.stt_type)
 
             cache_data = {
                 "file_name": file_name,
@@ -67,19 +79,23 @@ class AudioSortWorker(QThread):
                 "voice_ratio": voice_ratio,
                 "has_voice": has_voice,
                 "status": status_str,
-                "stt_text": ""
+                "stt_text": stt_text
             }
             self.processor.save_cache_json(self.dst_dir, file_name, cache_data)
 
             if not has_voice:
                 self.processor.copy_to_room_tone(file_name, self.src_dir, self.dst_dir)
-                
+                roomtone_count += 1
+                log_msg = f"{file_name} VAD {voice_ratio}% ROOMTONE"
+            else:
+                log_msg = f"{file_name} VAD {voice_ratio}% STT result: {stt_text}"
+
             self.status_signal.emit(file_name, status_str)
-            self.log_signal.emit(f"[{status_str}] {file_name} (Ratio: {voice_ratio}%)")
-            
+            self.log_signal.emit(log_msg)
             self.progress_signal.emit(int(((index + 1) / total_count) * 100))
             
-        self.finished_signal.emit()
+        elapsed_time = time.time() - start_time
+        self.finished_signal.emit(roomtone_count, elapsed_time)
 
 
 # [기본 디렉토리 및 설정 파일 초기화 / Initialize base directories and config files]
@@ -248,6 +264,7 @@ def start_sorting_process():
     dst_dir = window.txt_dst.text()
     selected_files = get_checked_audio_files()
     vad_type = window.combo_vad.currentText()
+    stt_type = window.combo_stt.currentText()
 
     if not selected_files:
         write_log("[Warning] No files selected.")
@@ -258,7 +275,7 @@ def start_sorting_process():
     window.AudioSortStart.setEnabled(False)
 
     global worker
-    worker = AudioSortWorker(selected_files, src_dir, dst_dir, processor, threshold, vad_type)
+    worker = AudioSortWorker(selected_files, src_dir, dst_dir, processor, threshold, vad_type, stt_type)
     
     worker.log_signal.connect(write_log)
     worker.status_signal.connect(update_item_status)  # UI Status 칸 실시간 업데이트 연결
@@ -269,10 +286,20 @@ def start_sorting_process():
 
 
 # [모든 작업 완료 시 UI 원복 처리 / Handle complete sorting process]
-def on_sorting_finished():
+def on_sorting_finished(roomtone_count, elapsed_time):
     window.AudioSortStart.setEnabled(True)
-    load_treeview(window.txt_src.text())
-    write_log("[Complete] Audio sorting process finished successfully.")
+    
+    src_dir = window.txt_src.text()
+    load_treeview(src_dir)
+    
+    mins = int(elapsed_time // 60)
+    secs = int(elapsed_time % 60)
+    time_str = f"{mins:02d}:{secs:02d}"
+    
+    total_files = len(get_checked_audio_files())
+    
+    write_log("COMPLETED")
+    write_log(f"TOTAL FILE {total_files} ROOMTONE {roomtone_count} TOTAL TIME {time_str}")
 
 # [모든 파일 상태 초기화 / Reset status of all files]
 def reset_status_of_all_files():

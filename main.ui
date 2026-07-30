@@ -243,7 +243,41 @@
              </widget>
             </item>
             <item row="2" column="3">
-             <widget class="QComboBox" name="combo_stt"/>
+             <widget class="QComboBox" name="combo_stt">
+              <property name="currentIndex">
+               <number>1</number>
+              </property>
+              <item>
+               <property name="text">
+                <string>Whisper tiny</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Whisper base</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Whisper large-v3</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Whisper large-v3-turbo</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Canary-Qwen 2.5B</string>
+               </property>
+              </item>
+              <item>
+               <property name="text">
+                <string>Qwen3-ASR 1.7B</string>
+               </property>
+              </item>
+             </widget>
             </item>
             <item row="8" column="0" colspan="4">
              <widget class="QProgressBar" name="AudioSortProgress">
