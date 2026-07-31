@@ -17,26 +17,15 @@ class AudioLogicProcessor:
     def load_app_settings(self):
         setting_path = self.get_setting_filepath()
         default_settings = {
-            "highpass_cutoff": 80.0,
-            "min_file_duration": 1.0,
-            "last_used_preset": "default"
+            "highpass_cutoff": 80.0
         }
-        
         if os.path.exists(setting_path):
             try:
                 with open(setting_path, "r", encoding="utf-8") as f:
                     return json.load(f)
             except Exception:
                 return default_settings
-                
-        self.save_app_settings(default_settings)
         return default_settings
-
-    # [글로벌 시스템 설정 파일 저장 / Save global system settings]
-    def save_app_settings(self, settings_dict):
-        setting_path = self.get_setting_filepath()
-        with open(setting_path, "w", encoding="utf-8") as f:
-            json.dump(settings_dict, f, ensure_ascii=False, indent=4)
 
 
     def __init__(self):
@@ -46,6 +35,8 @@ class AudioLogicProcessor:
         self.highpass_cutoff = 80  
         self.vad_model = None
         self.stt_model = None
+        self.stt_model_canary = None
+        self.stt_model_qwen3 = None
         settings = self.load_app_settings()
         self.highpass_cutoff = settings.get("highpass_cutoff", 80.0)
         
@@ -297,9 +288,15 @@ class AudioLogicProcessor:
 
     @staticmethod
     def copy_to_room_tone(file_name, src_dir, dst_dir):
-
-        # 1. 대상 경로 아래에 'room_tone' 폴더 경로 조립
-        room_tone_dir = os.path.join(dst_dir, "room_tone")
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap")
+        os.makedirs(base_dir, exist_ok=True)
+        settings_path = os.path.join(base_dir, "setting.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                room_tone_folder_name = settings.get("general_room_tone_folder_name", "room_tone")
+        
+        room_tone_dir = os.path.join(dst_dir, room_tone_folder_name)
         
         if not os.path.exists(room_tone_dir):
             os.makedirs(room_tone_dir)
@@ -309,23 +306,73 @@ class AudioLogicProcessor:
 
         if os.path.exists(src_path):
             shutil.copy(src_path, dst_path)
+    @staticmethod
+    def copy_to_classified(file_name, src_dir, dst_dir):
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap")
+        os.makedirs(base_dir, exist_ok=True)
+        settings_path = os.path.join(base_dir, "setting.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                classified_folder_name = settings.get("general_classified_folder_name", "classified")
+        classified_dir = os.path.join(dst_dir, classified_folder_name)
+        
+        if not os.path.exists(classified_dir):
+            os.makedirs(classified_dir)
 
-    def run_selected_stt(self, audio_data, stt_type):
+        src_path = os.path.join(src_dir, file_name)
+        dst_path = os.path.join(classified_dir, file_name)
+
+        if os.path.exists(src_path):
+            shutil.copy(src_path, dst_path)
+
+    @staticmethod
+    def copy_to_short_duration(file_name, src_dir, dst_dir):
+        
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap")
+        os.makedirs(base_dir, exist_ok=True)
+        settings_path = os.path.join(base_dir, "setting.json")
+        if os.path.exists(settings_path):
+            with open(settings_path, "r", encoding="utf-8") as f:
+                settings = json.load(f)
+                short_duration_folder_name = settings.get("general_short_duration_folder_name", "short_duration")
+        short_duration_dir = os.path.join(dst_dir, short_duration_folder_name)
+
+        if not os.path.exists(short_duration_dir):
+            os.makedirs(short_duration_dir)
+
+
+        src_path = os.path.join(src_dir, file_name)
+        dst_path = os.path.join(short_duration_dir, file_name)
+
+        if os.path.exists(src_path):
+            shutil.copy(src_path, dst_path)
+
+    # [선택된 STT 모델 및 언어 설정에 맞춰 대사 추출 실행 / Execute speech-to-text with the selected model and language]
+    def run_selected_stt(self, audio_data, stt_type, stt_lang):
+        lang_code = stt_lang[:2].lower()
+        if lang_code == "au":
+            lang_code = None
+        elif lang_code == "kr":
+            lang_code = "ko"
+            
         if "Whisper tiny" in stt_type:
-            return self.run_whisper_tiny_stt(audio_data)
+            return self.run_whisper_tiny_stt(audio_data, lang_code)
         elif "Whisper base" in stt_type:
-            return self.run_whisper_base_stt(audio_data)
-        elif "Whisper large-v3" in stt_type:
-            return self.run_whisper_large_v3_stt(audio_data)
+            return self.run_whisper_base_stt(audio_data, lang_code)
         elif "Whisper large-v3-turbo" in stt_type:
-            return self.run_whisper_large_v3_turbo_stt(audio_data)
+            return self.run_whisper_large_v3_turbo_stt(audio_data, lang_code)
+        elif "Whisper large-v3" in stt_type:
+            return self.run_whisper_large_v3_stt(audio_data, lang_code)
         elif "Canary-Qwen" in stt_type:
-            return self.run_canary_qwen_stt(audio_data)
+            return self.run_canary_qwen_stt(audio_data, lang_code)
         elif "Qwen3" in stt_type:
-            return self.run_qwen3_stt(audio_data)
+            return self.run_qwen3_stt(audio_data, lang_code)
+        return ""
+
 
     # [로컬 Whisper tiny 모델 구동 및 대사 추출 / Run offline Whisper tiny model and transcribe text]
-    def run_whisper_tiny_stt(self, audio_data):
+    def run_whisper_tiny_stt(self, audio_data, lang_code):
         from faster_whisper import WhisperModel
         import torch
         base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
@@ -336,14 +383,14 @@ class AudioLogicProcessor:
         if self.stt_model is None:
             device_type = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device_type == "cuda" else "float32"
-            self.stt_model = WhisperModel("tiny", device=device_type, compute_type=compute_type,cache_dir = base_dir)
-        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+            self.stt_model = WhisperModel(model_path, device=device_type, compute_type=compute_type,cache_dir = base_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, language=lang_code, beam_size=5)
         for segment in segments:
             transcription += segment.text
         return transcription.strip()
 
     # [로컬 Whisper base 모델 구동 및 대사 추출 / Run offline Whisper base model and transcribe text]
-    def run_whisper_base_stt(self, audio_data):
+    def run_whisper_base_stt(self, audio_data, lang_code):
         from faster_whisper import WhisperModel
         import torch
         base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
@@ -354,14 +401,14 @@ class AudioLogicProcessor:
         if self.stt_model is None:
             device_type = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device_type == "cuda" else "float32"
-            self.stt_model = WhisperModel("base", device=device_type, compute_type=compute_type,cache_dir = base_dir)
-        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+            self.stt_model = WhisperModel("base", device=device_type, compute_type=compute_type, download_root=local_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, language=lang_code, beam_size=5)
         for segment in segments:
             transcription += segment.text
         return transcription.strip()
     
     # [로컬 Whisper large v3 모델 구동 및 대사 추출 / Run offline Whisper large v3 model and transcribe text]
-    def run_whisper_large_v3_stt(self, audio_data):
+    def run_whisper_large_v3_stt(self, audio_data, lang_code):
         from faster_whisper import WhisperModel
         import torch
         base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
@@ -372,32 +419,68 @@ class AudioLogicProcessor:
         if self.stt_model is None:
             device_type = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device_type == "cuda" else "float32"
-            self.stt_model = WhisperModel("large-v3", device=device_type, compute_type=compute_type,cache_dir = base_dir)
-        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+            self.stt_model = WhisperModel("large-v3", device=device_type, compute_type=compute_type, download_root=local_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, language=lang_code, beam_size=5)
         for segment in segments:
             transcription += segment.text
         return transcription.strip()
     
     # [로컬 Whisper large v3 turbo 모델 구동 및 대사 추출 / Run offline Whisper large v3 turbo`` model and transcribe text]
-    def run_whisper_large_v3_turbo_stt(self, audio_data):
+    def run_whisper_large_v3_turbo_stt(self, audio_data, lang_code):
         from faster_whisper import WhisperModel
         import torch
+        base_dir = os.path.join(os.getenv("APPDATA"), "asap", "models")
+        local_dir = os.path.join(base_dir, "Whisper")
+        model_path = os.path.join(local_dir, "large-v3-turbo")
         transcription = ""
         if self.stt_model is None:
             device_type = "cuda" if torch.cuda.is_available() else "cpu"
             compute_type = "float16" if device_type == "cuda" else "float32"
-            self.stt_model = WhisperModel("large-v3-turbo", device=device_type, compute_type=compute_type)
-        segments, _ = self.stt_model.transcribe(audio_data, beam_size=5)
+            self.stt_model = WhisperModel("large-v3-turbo", device=device_type, compute_type=compute_type, download_root=local_dir)
+        segments, _ = self.stt_model.transcribe(audio_data, language=lang_code, beam_size=5)
         for segment in segments:
             transcription += segment.text
         return transcription.strip()
 
-
     # [Canary-Qwen 2.5B 모델 구동 / Run Canary-Qwen 2.5B model]
-    def run_canary_qwen_stt(self, audio_data):
-        return ""
+    def run_canary_qwen_stt(self, audio_data, lang_code):
+        from transformers import pipeline
+        import torch
+
+        model_dir = self.get_model_directory("Canary-Qwen-2.5B")
+        
+        if self.stt_model_canary is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            self.stt_model_canary = pipeline(
+                "automatic-speech-recognition",
+                model="Qwen/Qwen2-Audio-7B-Instruct",
+                device=device,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            )
+        generated_kwargs = {"generated_kwargs" :{"language": lang_code} if lang_code else {}}
+
+        result = self.stt_model_canary(audio_data, **generated_kwargs)
+        return result["text"].strip()
+
 
     # [Qwen3-ASR 1.7B 모델 구동 / Run Qwen3-ASR 1.7B model]
-    def run_qwen3_stt(self, audio_data):
-        return ""
+    def run_qwen3_stt(self, audio_data, lang_code):
+        from transformers import pipeline
+        import torch
 
+        model_dir = self.get_model_directory("Qwen3-ASR-1.7B")
+
+        if self.stt_model_qwen3 is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            
+            self.stt_model_qwen3 = pipeline(
+                "automatic-speech-recognition",
+                model="Qwen/Qwen2-Audio-Instruct",
+                device=device,
+                model_kwargs={"local_files_only": True} if os.listdir(model_dir) else {}
+            )
+
+        generated_kwargs = {"generated_kwargs" :{"language": lang_code} if lang_code else {}}
+        result = self.stt_model_qwen3(audio_data, **generated_kwargs)
+        return result["text"].strip()
