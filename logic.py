@@ -155,8 +155,6 @@ class AudioLogicProcessor:
     def run_selected_vad(self, audio_data, sample_rate, vad_type):
         if "FireRed" in vad_type:
             return self.run_firered_vad(audio_data, sample_rate)
-        elif "WebRTC" in vad_type:
-            return self.run_webrtc_vad(audio_data, sample_rate)
         elif "Silero" in vad_type:
             return self.run_silero_vad(audio_data, sample_rate)
 
@@ -166,12 +164,10 @@ class AudioLogicProcessor:
         local_dir = os.path.join(base_dir, model_name)
         os.makedirs(local_dir, exist_ok=True)
         
-        # 폴더가 비어 있는 최초 구동 시점에만 자동으로 원격 허브에서 파일을 다운로드
         if not os.listdir(local_dir):
             print(f"Model missing. Downloading {model_name} automatically...")
             from huggingface_hub import snapshot_download
-            
-            # FireRedVAD 공식 저장소 전체를 지정된 Roaming 폴더 하위에 로컬로 온전하게 다운로드
+              
             snapshot_download(repo_id="FireRedTeam/FireRedVAD", local_dir=local_dir)
             
         return local_dir
@@ -206,49 +202,6 @@ class AudioLogicProcessor:
             speech_segments.append({"start": start, "end": end})
             
         return speech_segments
-
-    # [WebRTC VAD 모델 구동 / Run WebRTC VAD model]
-    def run_webrtc_vad(self, audio_data, sample_rate):
-        import webrtcvad
-        import numpy as np
-
-        # 1. 16kHz 모노 데이터로 변환 후 int16 PCM(정수형)으로 스케일 변경
-        vad_audio, vad_sr = self.prepare_audio_for_vad(audio_data, sample_rate)
-        pcm_data = (vad_audio * 32767).astype(np.int16)
-        
-        # 2. WebRTC VAD 설정 (감도 범위: 0~3, 3이 가장 엄격하게 노이즈를 제함)
-        vad = webrtcvad.Vad(3)
-        
-        # 3. 30ms 프레임 슬라이싱 수치 계산 (16000Hz * 0.03s = 480샘플)
-        frame_ms = 30
-        frame_size = int(vad_sr * (frame_ms / 1000.0))
-        
-        # 4. 프레임별로 루프를 순회하며 음성 감지 상태 제어
-        speech_segments = []
-        in_speech = False
-        speech_start = 0.0
-        
-        for i in range(0, len(pcm_data) - frame_size, frame_size):
-            frame = pcm_data[i : i + frame_size]
-            frame_bytes = frame.tobytes()
-            
-            # WebRTC C++ 엔진에 바이트 데이터를 공급해 음성 여부 판정
-            is_speech = vad.is_speech(frame_bytes, vad_sr)
-            current_time = i / vad_sr
-            
-            if is_speech and not in_speech:
-                in_speech = True
-                speech_start = current_time
-            elif not is_speech and in_speech:
-                in_speech = False
-                speech_segments.append({"start": speech_start, "end": current_time})
-                
-        # 대사 도중에 파일이 끝나는 경우 예외 세그먼트 마감 처리
-        if in_speech:
-            speech_segments.append({"start": speech_start, "end": len(pcm_data) / vad_sr})
-            
-        return speech_segments
-
     
     # [silero VAD 모델 구동 / Run silero VAD model]
     def run_silero_vad(self, audio_data, sample_rate):

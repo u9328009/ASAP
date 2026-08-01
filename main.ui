@@ -283,13 +283,8 @@
             <item row="3" column="1">
              <widget class="QComboBox" name="combo_vad">
               <property name="currentIndex">
-               <number>1</number>
+               <number>0</number>
               </property>
-              <item>
-               <property name="text">
-                <string>FireRed (Heavy)</string>
-               </property>
-              </item>
               <item>
                <property name="text">
                 <string>Silero (Balenced)</string>
@@ -297,7 +292,7 @@
               </item>
               <item>
                <property name="text">
-                <string>WebRTC (Light)</string>
+                <string>FireRed (Heavy)</string>
                </property>
               </item>
              </widget>
